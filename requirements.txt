@@ -1,0 +1,5 @@
+httpx_socks
+httpx
+openai
+aiogram
+python-dotenv
