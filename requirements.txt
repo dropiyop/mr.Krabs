@@ -3,3 +3,9 @@ httpx
 openai
 aiogram
 python-dotenv
+aiohttp
+feedparser
+requests
+playwright
+simple_tg_md
+apscheduler

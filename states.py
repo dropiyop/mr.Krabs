@@ -1,6 +1,5 @@
 from aiog import *
 
-
-class Form(aiogram.fsm.state.StatesGroup):
-    waiting_for_contact = aiogram.fsm.state.State()
-
+class Form(StatesGroup):
+    waiting_for_contact = State()
+    waiting_for_prompt = State()
