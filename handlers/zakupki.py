@@ -9,13 +9,26 @@ import datetime
 import editabs
 import aiohttp
 from simple_tg_md import convert_to_md2
+from pathlib import Path
 
 def load_keywords(filepath: str =r"keywords") -> list[str]:
     with open(filepath, "r", encoding="utf-8") as f:
         return [line.strip() for line in f if line.strip()]
 
 
+def load_prompt(filename: str = "prompt.txt") -> list[str]:
+    # Получаем путь к корню проекта
+    current_file = Path(__file__)
+    project_root = current_file.parent.parent  # handlers/../
+    filepath = project_root / filename
 
+    if not filepath.exists():
+        raise FileNotFoundError(f"Файл {filepath} не найден")
+
+    with open(filepath, "r", encoding="utf-8") as f:
+        return [line.strip() for line in f if line.strip()]
+
+prompt = load_prompt("prompt.txt")
 
 def matches_keywords(text: str, keywords: list[str]) -> bool:
     lowered = text.lower()
@@ -47,7 +60,6 @@ async def get_page_items(keyword, page, fz_key, session, headers, base_params, u
     params["pageNumber"] = page
     params["searchString"] = keyword
 
-    print(f"Обрабатываем: {keyword}, страница {page}")
     await asyncio.sleep(0.6)
 
     try:
@@ -94,19 +106,15 @@ async def get_all_today_items_filter(fz_key: str, fz_name: str, session, headers
     found_ids = set()
     all_items = []
 
-    print(today_start)
 
     for keyword in keywords:
         async for page_items in fetch_pages (keyword, fz_key, session, headers, base_params, url):
             should_break_keyword = False
             for item in page_items:
-                print(item)
                 created = item.get("createDate") or item.get("updateDate")
 
                 if not created or created <= today_start:
                     created_date = "Unknown" if not created else datetime.datetime.fromtimestamp(created / 1000)
-                    print(f"Найден старый элемент: {created_date}")
-                    print(f"Прекращаем поиск по ключевому слову '{keyword}'")
                     should_break_keyword = True
                     break
 
@@ -117,11 +125,9 @@ async def get_all_today_items_filter(fz_key: str, fz_name: str, session, headers
 
                 # фильтрация по содержанию
                 if not is_relevant(item, keywords):
-                    print("Элемент не релевантен")
                     continue
 
                 if  editabs.check(str(number), fz_key):
-                    print(f"❌ Закупка {number} уже есть в БД, пропускаем")
                     continue
 
                 if number:
@@ -134,31 +140,7 @@ async def get_all_today_items_filter(fz_key: str, fz_name: str, session, headers
                     response = await init_clients.client_openai.chat.completions.create(
                         model="gpt-4o-mini",
                         messages=[
-                            {"role": "system", "content": "Ты работаешь менеджером в it компании. Твоя задача отслеживать объявления о закупках."
-                                                          "Присылаю тебе также ключевые слова для сверки"
-                                                          "ориенитруйся также по ним"
-                                                          "Отрасль:"
-                                                          "Программное обеспечение. Сопровождение"
-                                                          "Программное обеспечение (юридическое, бухгалтерское, информационно-справочные системы). Сопровождение."
-                                                          "Программное обеспечение (для специализированного оборудования, производства и исследований в различных отраслях). Сопровождение."
-                                                          "Контрольно-кассовое оборудование и материалы"
-                                                          "Создание и сопровождение интернет-сайтов"
-                                                          "Услуги в области программирования"
-                                                          "Прочие услуги в области информационных технологий"
-                                                          "Услуги в области защиты информации"
-                                                          "Оборудование для защиты информации"
-                                                          "Услуги в области образования и повышения квалификации"
-                                                          "Разработка программного обеспечения"
-                                                          
-                                                          "Также, используй это описание для поиска некоторых закупок, не применяй это описание как основное правило, это вспомогательное описание:"
-                                                          "Наименование поставляемых товаров : поставка  средства криптографической защиты информации"
-                                                          "Требования к техническим характеристикам товара к безопасности: Поставщик настоящим гарантирует, что товар, "
-                                                           "поставляемый в рамках договора, является новым, неиспользованным, серийным, отражающим все последние модификации. "
-                                                          "Поставляемый товар должен быть упакован и замаркирован в соответствии с действующими стандартами. Тара и упаковка                                "
-                                                          "должны гарантировать целостность и сохранность товара при перевозке и хранении. Упаковка не должна содержать вскрытий, вмятин, "
-                                                           "порезов и обеспечивать сохранность при транспортировке и хранении."
-                                                          "Если запись подходит, то возвращай ровно тот же текст что тебе и пришел."
-                                                          "Если запись не подходит ответь 'нет'"},
+                            {"role": "system", "content": f"{prompt}"},
 
                             {"role": "user", "content": f"{item}\n{keywords} "}
 
@@ -169,13 +151,11 @@ async def get_all_today_items_filter(fz_key: str, fz_name: str, session, headers
                         )
 
                     answer_gpt = response.choices[0].message.content.strip()
-                    print(answer_gpt)
                     if answer_gpt.lower() == 'нет':
                         print(f"⛔ Закупка {number} отклонена GPT")
                         continue
                     else:
                         found_ids.add(uid)
-                        print(found_ids)
                         all_items.append(item)
                         print(f"Добавлен элемент: {uid}")
                         await send_notice(fz_key,fz_name,item)
@@ -232,13 +212,13 @@ async def send_notice(fz_key,fz_name,item):
         markup = InlineKeyboardMarkup(
             inline_keyboard=[[InlineKeyboardButton(text="Открыть закупку", url=full_url)]]
             )
-        text = "🆕Новая закупка с сайта 'ЕИС закупки'\n\n "
-        text = procession.clean_telegram_message(f"🆕Новая закупка с сайта 'ЕИС закупки' {fz_name}\n{title}")
+        header = "🆕Новая закупка с сайта 'ЕИС закупки'\n\n"
+        text = procession.clean_telegram_message(f"{title}")
         text = convert_to_md2(text)
         try:
             await init_clients.bot.send_message(
                 chat_id=chat_id,
-                text=text,
+                text=header+text,
                 reply_markup=markup,
                 parse_mode=aiogram.enums.ParseMode.MARKDOWN_V2
                 )
@@ -301,6 +281,7 @@ async def periodic_check():
         try:
             # Создаем одну сессию для всей проверки
             session = aiohttp.ClientSession()
+            print(f"\n[{datetime.datetime.now()}] Начинаем проверку zakupki")
 
             # Обрабатываем с передачей сессии
             await process_items("fz44", "44-ФЗ",  session)
@@ -338,6 +319,5 @@ async def periodic_check():
         except asyncio.TimeoutError:
             # Продолжаем цикл
             continue
-
 
 

@@ -2,11 +2,10 @@ import sqlite3
 
 
 def check(number: str, fz=None) -> bool:
-    conn = sqlite3.connect(r"C:\Mr.Krabs\pythonProject\tracking.db")
+    conn = sqlite3.connect(r"tracking.db")
     cursor = conn.cursor()
 
     number = number.strip()  # Страхуемся от пробелов
-    print(f"[DEBUG] Проверка номера: {number}, fz: {fz}")
 
     if fz:
         # Если указан fz, проверяем по номеру И по fz
@@ -24,14 +23,13 @@ def check(number: str, fz=None) -> bool:
     exists = cursor.fetchone() is not None
     conn.close()
 
-    print(f"[DEBUG] Результат проверки: {exists}")
     return exists
 
 
 
 def clear_zakupkigov():
     """Очищает все записи из таблицы zakupkigov (но оставляет саму таблицу)"""
-    conn = sqlite3.connect(r"C:\Mr.Krabs\pythonProject\tracking.db")
+    conn = sqlite3.connect(r"tracking.db")
     cursor = conn.cursor()
 
     try:
@@ -44,7 +42,7 @@ def clear_zakupkigov():
         conn.close()
 
 def save(number, fz=None):
-    conn = sqlite3.connect(r"C:\Mr.Krabs\pythonProject\tracking.db")
+    conn = sqlite3.connect(r"tracking.db")
     cursor = conn.cursor()
 
     try:
@@ -61,7 +59,7 @@ def save(number, fz=None):
         conn.close()
 
 def get_client_users():
-    conn = sqlite3.connect(r"C:\Mr.Krabs\pythonProject\tracking.db")
+    conn = sqlite3.connect(r"tracking.db")
     cursor = conn.cursor()
 
     cursor.execute("SELECT * FROM init_clients")
@@ -75,7 +73,7 @@ def get_client_users():
 
 def add_init_client(user_id,chat_id,contact_username,contact_name,contact_phone):
 
-    conn = sqlite3.connect(r"C:\Mr.Krabs\pythonProject\tracking.db")
+    conn = sqlite3.connect(r"tracking.db")
     cursor = conn.cursor()
 
     cursor.execute("""

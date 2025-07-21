@@ -10,6 +10,9 @@ import datetime
 import  logging
 from logging.handlers import RotatingFileHandler
 import os
+from database import *
+
+init_db()
 
 # Настройка логирования
 LOG_DIR = "logs"
@@ -90,7 +93,8 @@ async def periodic_checks():
                 tasks = [
                     asyncio.create_task(zakupki.periodic_check()),
                     asyncio.create_task(mimz.periodic_check_mimz()),
-                    asyncio.create_task((zakupki_all_regions.periodic_check_all_regions()))
+                    asyncio.create_task((zakupki_all_regions.periodic_check_all_regions())),
+                    asyncio.create_task((eat.periodic_check_eat()))
                     ]
 
                 # Ждем завершения всех задач

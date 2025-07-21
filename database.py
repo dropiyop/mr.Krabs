@@ -1,7 +1,7 @@
 import sqlite3
 
 def init_db():
-    conn = sqlite3.connect(r"C:\Mr.Krabs\pythonProject\tracking.db")
+    conn = sqlite3.connect(r"tracking.db")
     cursor = conn.cursor()
 
     cursor.execute('''
@@ -26,4 +26,3 @@ def init_db():
     conn.commit()
     conn.close()
 
-init_db()
