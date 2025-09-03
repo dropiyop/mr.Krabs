@@ -137,7 +137,6 @@ async def get_all_today_items_filter(fz_key: str, fz_name: str, session, headers
 
                 uid = f"{fz_key}:{item.get('number') or item.get('recordId')}"
                 if uid not in found_ids:
-                    print(item)
                     response = await init_clients.client_openai.chat.completions.create(
                         model="gpt-4o-mini",
                         messages=[

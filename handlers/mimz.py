@@ -1,9 +1,5 @@
-from http.client import responses
-import re
-from datetime import datetime, date
-from playwright.sync_api import sync_playwright
-import json
-import time
+from datetime import  date
+from playwright.async_api import async_playwright
 import asyncio
 from aiog import *
 import re
@@ -12,11 +8,10 @@ import init_clients
 from simple_tg_md import convert_to_md2
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
-import openai
 from pathlib import Path
-
+import os
 from main import logger
-
+import platform
 
 def load_keywords(filepath: str = r"keywords") -> list[str]:
     with open(filepath, "r", encoding="utf-8") as f:
@@ -61,9 +56,7 @@ async def filter_notices(notices, keywords):
         # Объединяем текст для поиска
         search_text = f"{notice.get('name', '')} {notice.get('uchr_sname', '')}"
 
-
         number = notice.get('number', '')
-
         if  editabs.check(number, fz=None):
             continue
 
@@ -161,8 +154,8 @@ async def send_all_filtered_notices(filtered_notices):
     return total_sent
 
 
-def scrape_mimz_sync():
-    """Синхронная функция для скрапинга МИМЗ с исправленной навигацией"""
+async def scrape_mimz_async():
+    """Асинхронная функция для скрапинга МИМЗ с исправленной навигацией"""
 
     notices_data = []
     current_page = 1
@@ -170,22 +163,47 @@ def scrape_mimz_sync():
     today_formatted = today.strftime("%d.%m.%Y")
     should_continue = True
 
+    if platform.system() == "Windows":
+        chrome_paths = [
+            "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+            "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
+            os.path.expanduser("~\\AppData\\Local\\Google\\Chrome\\Application\\chrome.exe")
+            ]
+    else:  # Linux/macOS
+        chrome_paths = [
+            "/usr/bin/google-chrome",
+            "/usr/bin/chromium-browser",
+            "/usr/bin/chromium",
+            "/snap/bin/chromium",
+            "/usr/bin/google-chrome-stable",
+            "/opt/google/chrome/chrome",
+            "/usr/local/bin/chrome",
+            "/usr/local/bin/chromium"
+            ]
 
-    with sync_playwright() as p:
-        browser = p.chromium.launch(
+    chrome_path = None
+    for path in chrome_paths:
+        if os.path.exists(path):
+            chrome_path = path
+            break
+
+    if not chrome_path:
+        logger.error("Chrome не найден")
+        return []
+
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(
             headless=True,
-            executable_path="/snap/bin/chromium"
+            executable_path=chrome_path
             )
-        context = browser.new_context(ignore_https_errors=True)
-        page = context.new_page()
+        context = await browser.new_context(ignore_https_errors=True)
+        page = await context.new_page()
 
-        def handle_response(response):
+        async def handle_response(response):
             nonlocal notices_data
             if "NoticesJson" in response.url:
                 try:
-                    data = response.json()
-
-
+                    data = await response.json()
                     page_notices = []
                     if isinstance(data, list):
                         page_notices = data
@@ -200,59 +218,53 @@ def scrape_mimz_sync():
                             page_notices = [data]
 
                     notices_data.extend(page_notices)
-
                 except Exception as e:
                     logger.error(f"Ошибка парсинга JSON: {e}")
 
         page.on("response", handle_response)
 
         # Переходим на первую страницу
-        page.goto("https://mimz.admoblkaluga.ru/GzwSP/NoticesGrid")
-        page.wait_for_load_state("networkidle")
-        page.wait_for_timeout(3000)
+        await page.goto("https://mimz.admoblkaluga.ru/GzwSP/NoticesGrid")
+        await page.wait_for_load_state("networkidle")
+        await page.wait_for_timeout(3000)
 
         while should_continue:
-
-            # Проверяем даты публикации на текущей странице
             try:
-                page.wait_for_timeout(2000)
+                await page.wait_for_timeout(2000)
 
                 publication_date_found = False
                 dates_on_page = []
 
                 try:
-                    date_captions = page.query_selector_all("span.caption:has-text('Дата публикации')")
+                    date_captions = await page.query_selector_all("span.caption:has-text('Дата публикации')")
 
                     for i, caption in enumerate(date_captions):
                         try:
-                            parent_td = caption.query_selector("xpath=..")
+                            parent_td = await caption.query_selector("xpath=..")
                             if parent_td:
-                                spans_in_td = parent_td.query_selector_all("span")
+                                spans_in_td = await parent_td.query_selector_all("span")
 
                                 for span in spans_in_td:
-                                    span_text = span.inner_text().strip()
+                                    # ИСПРАВЛЕНИЕ: await только для async метода
+                                    span_text_raw = await span.inner_text()
+                                    span_text = span_text_raw.strip()
+
                                     date_match = re.match(r'^(\d{1,2})\.(\d{1,2})\.(\d{4})$', span_text)
                                     if date_match:
                                         day, month, year = map(int, date_match.groups())
                                         try:
                                             parsed_date = date(year, month, day)
                                             dates_on_page.append(parsed_date)
-
                                             if parsed_date == today:
                                                 publication_date_found = True
-
                                         except ValueError:
                                             continue
-
                         except Exception as block_error:
                             logger.error(f"⚠️ Ошибка при обработке блока даты {i + 1}: {block_error}")
                             continue
 
                 except Exception as search_error:
                     logger.error(f"⚠️ Ошибка при поиске блоков дат публикации: {search_error}")
-
-                if dates_on_page:
-                    dates_sorted = sorted(dates_on_page)
 
                 # Логика остановки: если на странице нет сегодняшних дат
                 if not publication_date_found:
@@ -262,26 +274,22 @@ def scrape_mimz_sync():
             except Exception as e:
                 logger.error(f"⚠Ошибка при проверке дат: {e}")
 
+            # Поиск кнопки следующей страницы
             next_button = None
             try:
-                # Сначала пробуем найти кнопку "следующая страница" (span.page.next)
-                next_button = page.query_selector("span.page.next:not(:has(span:text-is(' ')))")
+                next_button = await page.query_selector("span.page.next:not(:has(span:text-is(' ')))")
 
                 if not next_button:
-                    # Если кнопка next недоступна, ищем span с номером следующей страницы
-                    # Текущая страница имеет класс active, нам нужна следующая
                     next_page_selector = f"span.page[value='{current_page}']:not(.active)"
-                    next_button = page.query_selector(next_page_selector)
-
+                    next_button = await page.query_selector(next_page_selector)
 
                 if not next_button:
-                    # Альтернативный способ: найти активную страницу и взять следующую
-                    active_page = page.query_selector("span.page.active")
+                    active_page = await page.query_selector("span.page.active")
                     if active_page:
-                        active_value = active_page.get_attribute("value")
+                        active_value = await active_page.get_attribute("value")
                         if active_value is not None:
                             next_value = int(active_value) + 1
-                            next_button = page.query_selector(f"span.page[value='{next_value}']")
+                            next_button = await page.query_selector(f"span.page[value='{next_value}']")
 
             except Exception as e:
                 logger.error(f"Ошибка поиска кнопки пагинации: {e}")
@@ -291,54 +299,38 @@ def scrape_mimz_sync():
 
             # Переходим на следующую страницу
             try:
+                await next_button.click()
+                await page.wait_for_load_state("networkidle")
+                await page.wait_for_timeout(3000)
 
-                # Запоминаем количество записей до перехода
-                notices_before = len(notices_data)
-
-                # Кликаем по span элементу
-                next_button.click()
-
-                # Ждем загрузки новой страницы
-                page.wait_for_load_state("networkidle")
-                page.wait_for_timeout(3000)
-
-                # Проверяем, что страница действительно изменилась
-                # Ищем новый активный элемент
-                new_active = page.query_selector("span.page.active")
+                # ИСПРАВЛЕНИЕ: добавить await
+                new_active = await page.query_selector("span.page.active")
                 if new_active:
-                    new_active_value = new_active.get_attribute("value")
+                    new_active_value = await new_active.get_attribute("value")
                     if new_active_value:
-                        actual_page = int(new_active_value) + 1  # value начинается с 0
+                        actual_page = int(new_active_value) + 1
                         current_page = actual_page
                     else:
                         current_page += 1
                 else:
                     current_page += 1
 
-                # Дополнительное ожидание для AJAX-запросов
-                page.wait_for_timeout(2000)
-
-                # Проверяем, появились ли новые данные
-
+                await page.wait_for_timeout(2000)
 
             except Exception as e:
                 logger.error(f"Ошибка при переходе на следующую страницу: {e}")
                 break
 
-            # Защита от бесконечного цикла
             if current_page > 50:
                 break
 
-        browser.close()
-
-
+    # Фильтрация по сегодняшней дате (вне блока async with)
     today_notices = []
-    today_str  = today.strftime("%d.%m.%Y")
+    today_str = today.strftime("%d.%m.%Y")
 
     for notice in notices_data:
         if 'pub_date' in notice and notice['pub_date'] == today_str:
             today_notices.append(notice)
-
 
     return today_notices
 
@@ -352,14 +344,12 @@ async def periodic_check_mimz():
             keywords = load_keywords()
 
             # Выполняем скрапинг в отдельном потоке
-            loop = asyncio.get_event_loop()
-            with ThreadPoolExecutor() as executor:
-                notices_data = await loop.run_in_executor(executor, scrape_mimz_sync)
+            # Выполняем асинхронный скрапинг
+            notices_data = await scrape_mimz_async()
 
             if notices_data:
 
                 today_notices = filter_by_today_date(notices_data)
-
                 if not today_notices:
                     logger.info("Нет закупок за сегодняшнюю дату")
                 else:
