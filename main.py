@@ -39,6 +39,8 @@ console_handler.setLevel(logging.INFO)
 console_handler.setFormatter(formatter)
 logger.addHandler(console_handler)
 
+
+
 # Файловый обработчик с ротацией по размеру
 file_handler = RotatingFileHandler(
     filename=os.path.join(LOG_DIR, 'bot.log'),

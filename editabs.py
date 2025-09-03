@@ -1,8 +1,10 @@
 import sqlite3
+from main import logger
 
+filepath  = r"tracking.db"
 
 def check(number: str, fz=None) -> bool:
-    conn = sqlite3.connect(r"tracking.db")
+    conn = sqlite3.connect(filepath)
     cursor = conn.cursor()
 
     number = number.strip()  # Страхуемся от пробелов
@@ -29,20 +31,20 @@ def check(number: str, fz=None) -> bool:
 
 def clear_zakupkigov():
     """Очищает все записи из таблицы zakupkigov (но оставляет саму таблицу)"""
-    conn = sqlite3.connect(r"tracking.db")
+    conn = sqlite3.connect(filepath)
     cursor = conn.cursor()
 
     try:
         cursor.execute("DELETE FROM zakupkigov")
         conn.commit()
-        print("✅ Все записи из таблицы zakupkigov удалены")
+        logger.info("✅ Все записи из таблицы zakupkigov удалены")
     except Exception as e:
-        print(f"❌ Ошибка при очистке таблицы: {e}")
+        logger.error(f"❌ Ошибка при очистке таблицы: {e}")
     finally:
         conn.close()
 
 def save(number, fz=None):
-    conn = sqlite3.connect(r"tracking.db")
+    conn = sqlite3.connect(filepath)
     cursor = conn.cursor()
 
     try:
@@ -54,12 +56,12 @@ def save(number, fz=None):
 
         conn.commit()
     except Exception as e:
-        print(f"❌ Ошибка сохранения в БД: {e}")
+        logger.error(f"❌ Ошибка сохранения в БД: {e}")
     finally:
         conn.close()
 
 def get_client_users():
-    conn = sqlite3.connect(r"tracking.db")
+    conn = sqlite3.connect(filepath)
     cursor = conn.cursor()
 
     cursor.execute("SELECT * FROM init_clients")
@@ -73,7 +75,7 @@ def get_client_users():
 
 def add_init_client(user_id,chat_id,contact_username,contact_name,contact_phone):
 
-    conn = sqlite3.connect(r"tracking.db")
+    conn = sqlite3.connect(filepath)
     cursor = conn.cursor()
 
     cursor.execute("""

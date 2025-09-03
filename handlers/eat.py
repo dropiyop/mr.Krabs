@@ -13,12 +13,15 @@ import aiogram.exceptions
 import aiogram.enums
 from pathlib import Path
 
+from main import logger
+
+
 def load_keywords(filepath: str = r"keywords") -> list[str]:
     with open(filepath, "r", encoding="utf-8") as f:
         return [line.strip() for line in f if line.strip()]
 
 
-def load_prompt(filename: str = "prompt.txt") -> list[str]:
+def load_prompt(filename: str = "../prompt.txt") -> list[str]:
     # Получаем путь к корню проекта
     current_file = Path(__file__)
     project_root = current_file.parent.parent  # handlers/../
@@ -38,16 +41,9 @@ def matches_keywords(text: str, keywords: list[str]) -> bool:
 
 
 def is_relevant(item: dict, keywords: list[str]) -> bool:
-    # Проверяем название закупки
-    if matches_keywords(item.get("purchaseName", ""), keywords):
-        return True
 
     # Проверяем описание
     if matches_keywords(item.get("description", ""), keywords):
-        return True
-
-    # Проверяем название организации
-    if matches_keywords(item.get("organizationName", ""), keywords):
         return True
 
     # Проверяем предмет закупки
@@ -63,30 +59,25 @@ def current_time_ms() -> int:
     return int(today.timestamp() * 1000)
 
 
-async def get_current_user_agent():
-    """Получаем актуальный User-Agent через Playwright"""
-    async with async_playwright() as p:
-        browser = await p.chromium.launch()
-        page = await browser.new_page()
 
-        user_agent = await page.evaluate("navigator.userAgent")
-        await browser.close()
-        return user_agent
-
-
-async def get_page_items(keyword,  session, headers, base_payload, url):
-
+async def get_page_items(keyword, session, headers, base_payload, url):
+    """Получение данных для конкретного keyword"""
     await asyncio.sleep(0.6)
 
     try:
-        async with session.post(url, headers=headers, json=base_payload, timeout=15) as response:
+        # ✅ Добавляем keyword в searchText
+        payload = base_payload.copy()
+        payload["searchText"] = keyword
+
+
+        async with session.post(url, headers=headers, json=payload, timeout=15) as response:
             if response.status != 200:
-                print(f"HTTP ошибка {response.status}")
+                logger.info(f"HTTP ошибка {response.status} для keyword: {keyword}")
                 return None, False
 
             data = await response.json()
-            # Структура ответа может отличаться, проверяем разные варианты
             items = []
+
             if isinstance(data, dict):
                 if "data" in data:
                     items = data["data"].get("items", []) or data["data"].get("list", [])
@@ -95,150 +86,185 @@ async def get_page_items(keyword,  session, headers, base_payload, url):
                 elif "result" in data:
                     items = data["result"]
                 else:
-                    # Если структура неизвестна, попробуем сам data как список
                     if isinstance(data, list):
                         items = data
                     else:
-                        print(f"Неизвестная структура ответа: {list(data.keys())}")
                         return [], True
 
-            return items
+            return items, True
 
     except aiohttp.ClientError as e:
-        print(f"Сетевая ошибка при keyword='{keyword}': {e}")
+        logger.error(f"Сетевая ошибка для keyword '{keyword}': {e}")
         return None, False
     except json.JSONDecodeError as e:
-        print(f"Ошибка JSON при keyword='{keyword}': {e}")
+        logger.error(f"Ошибка JSON для keyword '{keyword}': {e}")
         return None, False
     except Exception as e:
-        print(f"Неизвестная ошибка при keyword='{keyword}': {e}")
+        logger.error(f"Неизвестная ошибка для keyword '{keyword}': {e}")
         return None, False
-
 
 
 async def get_all_today_items_filter(session, headers, base_payload, url):
-    """Версия с генератором для tender-cache-api"""
-    keywords = load_keywords()
+    """Получение данных с циклом по keywords через searchText"""
+    keywords = load_keywords(filepath="keywords")
     today_start = current_time_ms()
-    found_ids = set()
+
+    # ✅ Глобальные множества для дедупликации
+    processed_ids = set()  # ID всех обработанных элементов в этом запуске
+    found_ids = set()  # ID элементов, прошедших все фильтры
     all_items = []
 
-    print(f"Начинаем поиск с времени: {today_start}")
+
 
     for keyword in keywords:
-        await asyncio.sleep(1.5)
-        page_items = await get_page_items(keyword, session, headers, base_payload, url)
+        try:
+            await asyncio.sleep(1.5)  # Задержка между запросами
 
-        print(keyword)
+            #  Получаем данные для конкретного keyword
+            result = await get_page_items(keyword, session, headers, base_payload, url)
 
-        for item in page_items:
-            # Проверяем дату создания/обновления
-            created = None
-            for date_field in ["publishDate"]:
-                if date_field in item and item[date_field]:
-                    created = item[date_field]
-                    break
-
-            # Если дата в строковом формате, конвертируем
-            if isinstance(created, str):
-                try:
-                    # Пробуем разные форматы даты
-                    for fmt in ["%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"]:
-                        try:
-                            dt = datetime.datetime.strptime(created[:19], fmt)
-                            created = int(dt.timestamp() * 1000)
-                            break
-                        except ValueError:
-                            continue
-                except (IndexError, TypeError):
-                    created = None
-
-            if created and created <= today_start:
-                created_date = "Unknown" if not created else datetime.datetime.fromtimestamp(created / 1000)
-                break
-
-
-
-            # Получаем ID для уникальности (используем ID как основной ключ для БД)
-            item_id = item.get("id")
-            if not item_id:
-                print("❌ ID не найден, пропускаем")
+            # Обработка результата
+            if result is None:
+                logger.error(f"Не удалось получить данные для keyword: {keyword}")
                 continue
 
-            # # Фильтрация по содержанию
-            # if not is_relevant(item, keywords):
-            #     continue
+            if isinstance(result, tuple):
+                page_items, success = result
+                if not success or page_items is None:
+                    logger.error(f"Ошибка получения данных для keyword: {keyword}")
+                    continue
+            else:
+                page_items = result
+                if page_items is None:
+                    continue
 
-            # Проверяем, есть ли уже в БД (используем ID как уникальный ключ)
-            if editabs.check(str(item_id), ):
+            if not page_items:
                 continue
 
-            # Сохраняем в БД (используем ID как уникальный ключ)
-            editabs.save(number=str(item_id))
-            print(f"✅ Закупка {item_id} сохранена в БД")
 
-            uid = f"tender_api:{item_id}"
-            if uid not in found_ids:
-                # Проверяем через GPT
+            # Обрабатываем все полученные элементы
+            for item in page_items:
                 try:
-                    response = await init_clients.client_openai.chat.completions.create(
-                        model="gpt-4o-mini",
-                        messages=[
-                            {"role": "system", "content":f"{prompt}"},
-                            {"role": "user", "content": f"{item}\n{keywords}"}
-                            ],
-                        temperature=0.2
-                        )
-
-                    answer_gpt = response.choices[0].message.content.strip()
-                    print(f"Ответ GPT: {answer_gpt[:100]}...")
-
-                    if answer_gpt.lower() == 'нет':
-                        print(f"⛔ Закупка {item_id} отклонена GPT")
+                    item_id = item.get("id")
+                    if not item_id:
                         continue
-                    else:
-                        found_ids.add(uid)
-                        all_items.append(item)
-                        print(f"✅ Добавлен элемент: {uid}")
-                        await send_notice(item)
+
+                    # ✅ ПЕРВАЯ проверка: уже обработан в этом запуске?
+                    if item_id in processed_ids:
+                        continue
+
+                    # Добавляем в обработанные сразу
+                    processed_ids.add(item_id)
+
+                    # ✅ ВТОРАЯ проверка: есть ли в БД?
+                    if editabs.check(str(item_id)):
+                        continue
+
+                    # ✅ ТРЕТЬЯ проверка: релевантность (дополнительная проверка)
+                    if not is_relevant(item, keywords):
+                        continue
+
+                    created = None
+                    try:
+                        for date_field in ["publishDate"]:
+                            if date_field in item and item[date_field]:
+                                created = item[date_field]
+                                break
+
+                        # Конвертируем дату если нужно
+                        if isinstance(created, str):
+                            for fmt in ["%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"]:
+                                try:
+                                    dt = datetime.datetime.strptime(created[:19], fmt)
+                                    created = int(dt.timestamp() * 1000)
+                                    break
+                                except ValueError:
+                                    continue
+
+                    except (IndexError, TypeError, AttributeError) as e:
+                        logger.error(f"⚠️ Ошибка обработки даты для {item_id}: {e}")
+                        created = None
+
+                    # Фильтруем по дате (только сегодняшние)
+                    if created and created < today_start:
+                        continue
+
+                    # Сохраняем в БД
+                    try:
+                        editabs.save(number=str(item_id))
+                    except Exception as e:
+                        logger.error(f"Ошибка сохранения в БД для {item_id}: {e}")
+                        continue
+
+                    # ✅ Проверяем уникальность для отправки
+                    uid = f"tender_api:{item_id}"
+                    if uid not in found_ids:
+                        # GPT проверка
+                        try:
+                            response = await init_clients.client_openai.chat.completions.create(
+                                model="gpt-4o-mini",
+                                messages=[
+                                    {"role": "system", "content": f"{prompt}"},
+                                    {"role": "user", "content": f"{item}\n{keywords}"}
+                                    ],
+                                temperature=0.2
+                                )
+
+                            answer_gpt = response.choices[0].message.content.strip()
+
+                            if answer_gpt.lower() == 'нет':
+                                logger.info(f"Закупка {item_id} отклонена GPT")
+                                continue
+                            else:
+                                found_ids.add(uid)
+                                all_items.append(item)
+                                await send_notice(item)
+
+                        except Exception as e:
+                            logger.error(f"Ошибка при обращении к GPT для {item_id}: {e}")
+
+
+                            # Отправляем уведомление
+                            try:
+                                await send_notice(item)
+                            except Exception as e:
+                                logger.error(f"Ошибка отправки уведомления для {item_id}: {e}")
+
+
 
                 except Exception as e:
-                    print(f"Ошибка при обращении к GPT: {e}")
-                    # Если GPT недоступен, добавляем элемент без проверки
-                    found_ids.add(uid)
-                    all_items.append(item)
-                    await send_notice(item)
+                    logger.error(f"Ошибка обработки элемента {item.get('id', 'NO_ID')}: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    continue
 
-            else:
-                print(f"Элемент уже найден: {uid}")
+        except Exception as e:
+            logger.error(f"Критическая ошибка для keyword '{keyword}': {e}")
+            import traceback
+            traceback.print_exc()
+            continue
 
 
-    found_ids.clear()
     return all_items
-
 
 async def send_notice(item):
     """Отправка уведомления пользователям"""
     try:
         users_data = editabs.get_client_users()
-        print(f"[{datetime.datetime.now()}] Начинаем проверку для {len(users_data)} пользователей")
+        logger.info(f"[{datetime.datetime.now()}] Начинаем проверку для {len(users_data)} пользователей")
 
         # Получаем ID для формирования ссылки
         item_id = item.get("id")
         if not item_id:
-            print("❌ ID не найден")
             return
-
 
 
         # Получаем название
         title = ""
-        if "lotItems" in item and isinstance(item["lotItems"], list) and item["lotItems"]:
-            lot_name = item["lotItems"][0].get("name")
-            if lot_name:
-                title = str(lot_name).strip()
 
-
+        lot_name = item.get("subject")
+        if lot_name:
+            title = str(lot_name).strip()
 
 
         # Формируем URL на основе ID
@@ -252,7 +278,6 @@ async def send_notice(item):
                 break
 
             chat_id = user_data[0] if isinstance(user_data, tuple) else user_data
-            print(f"Обрабатываем chat_id: {chat_id}")
 
             markup = InlineKeyboardMarkup(
                 inline_keyboard=[[InlineKeyboardButton(text="Открыть закупку", url=full_url)]]
@@ -280,18 +305,16 @@ async def send_notice(item):
                 await asyncio.sleep(1)  # Задержка между сообщениями
 
                 if messages_sent >= max_messages_per_batch:
-                    print(f"Отправлено {messages_sent} сообщений, делаем паузу...")
                     await asyncio.sleep(10)
                     messages_sent = 0
 
             except aiogram.exceptions.TelegramRetryAfter as e:
-                print(f"Flood control: нужно подождать {e.retry_after} секунд")
                 await asyncio.sleep(e.retry_after + 1)
             except Exception as e:
-                print(f"Ошибка при отправке сообщения в чат {chat_id}: {e}")
+                logger.error(f"Ошибка при отправке сообщения в чат {chat_id}: {e}")
 
     except Exception as e:
-        print(f"Ошибка в send_notice: {e}")
+        logger.error(f"Ошибка в send_notice: {e}")
 
 
 async def process_tender_api(session):
@@ -299,33 +322,31 @@ async def process_tender_api(session):
     url = "https://tender-cache-api.agregatoreat.ru/api/TradeLot/list-published-trade-lots"
 
     # Получаем актуальный User-Agent
-    user_agent = await get_current_user_agent()
 
     headers = {
         "Content-Type": "application/json; charset=UTF-8",
         "Accept": "application/json, text/plain, */*",
         "Origin": "https://agregatoreat.ru",
         "Referer": "https://agregatoreat.ru/",
-        "User-Agent": user_agent
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
         }
 
     # Базовые параметры запроса
     base_payload = {
+        "page": 1,
+        "size": 100,
+        "lotStates": [2],
+        "isEatOnly": True,
+        "sort": [{"fieldName": "publishDate", "direction": 2}],
+        "searchText": "",  # ✅ Добавлен параметр searchText
+        "organizerRegions": ["40"]
+        }
 
-    "page": 1,
-    "size": 100,
-    "lotStates": [2],
-    "isEatOnly": True,
-   "sort": [{"fieldName": "publishDate", "direction": 2}],
-
-"organizerRegions": ["40"]
-
-}
 
     try:
         await get_all_today_items_filter(session, headers, base_payload, url)
     except Exception as e:
-        print(f"Ошибка в process_tender_api: {e}")
+        logger.error(f"Ошибка в process_tender_api: {e}")
         import traceback
         traceback.print_exc()
 
@@ -346,17 +367,17 @@ async def periodic_check_eat():
             connector = aiohttp.TCPConnector(limit=10)
             timeout = aiohttp.ClientTimeout(total=30)
             session = aiohttp.ClientSession(connector=connector, timeout=timeout)
-            print(f"\n[{datetime.datetime.now()}] Начинаем проверку ЕАТ")
+            logger.info(f"\n[{datetime.datetime.now()}] Начинаем проверку ЕАТ")
             await process_tender_api(session)
 
             # Небольшая задержка
             await asyncio.sleep(0.5)
 
         except asyncio.CancelledError:
-            print("Периодическая проверка отменена")
+            logger.error("Периодическая проверка отменена")
             break
         except Exception as e:
-            print(f"Ошибка в periodic_check: {e}")
+            logger.error(f"Ошибка в periodic_check: {e}")
             import traceback
             traceback.print_exc()
         finally:
@@ -368,7 +389,7 @@ async def periodic_check_eat():
         elapsed = asyncio.get_event_loop().time() - start_time
         sleep_time = max(0.0, interval - elapsed)
 
-        print(f"[{datetime.datetime.now()}] Проверка заняла {elapsed:.2f} сек")
+        logger.info(f"[{datetime.datetime.now()}] Проверка eat заняла  {elapsed:.2f} сек")
 
         # Ждем с возможностью прерывания
         try:
@@ -376,7 +397,6 @@ async def periodic_check_eat():
                 shutdown_event.wait(),
                 timeout=sleep_time
                 )
-            print("Получен сигнал остановки")
             break
         except asyncio.TimeoutError:
             # Продолжаем цикл

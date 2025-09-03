@@ -9,3 +9,4 @@ requests
 playwright
 simple_tg_md
 apscheduler
+bs4

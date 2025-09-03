@@ -12,6 +12,9 @@ import aiohttp
 from simple_tg_md import convert_to_md2
 from pathlib import Path
 
+from main import logger
+
+
 def load_keywords(filepath: str =r"keywords_all_regions") -> list[str]:
     with open(filepath, "r", encoding="utf-8") as f:
         return [line.strip() for line in f if line.strip()]
@@ -70,7 +73,7 @@ async def get_page_items(keyword, page, fz_key, session, headers, base_params, u
         async with session.get(url, headers=headers, params=params, timeout=10) as response:
             # В aiohttp используется response.status, а не response.status_code
             if response.status != 200:
-                print(f"HTTP ошибка {response.status}")
+                logger.error(f"HTTP ошибка {response.status}")
                 return None, False
 
             # В aiohttp нужно await для получения текста
@@ -79,14 +82,14 @@ async def get_page_items(keyword, page, fz_key, session, headers, base_params, u
             return data.get("data", {}).get("list", []), True
 
     except aiohttp.ClientError as e:
-        print(f"[{fz_key}] Сетевая ошибка при keyword='{keyword}': {e}")
+        logger.error(f"[{fz_key}] Сетевая ошибка при keyword='{keyword}': {e}")
         return None, False
     except json.JSONDecodeError as e:
-        print(f"[{fz_key}] Ошибка JSON при keyword='{keyword}': {e}")
+        logger.error(f"[{fz_key}] Ошибка JSON при keyword='{keyword}': {e}")
         # В aiohttp нет r.text, нужно сохранить text выше
         return None, False
     except Exception as e:
-        print(f"[{fz_key}] Неизвестная ошибка при keyword='{keyword}': {e}")
+        logger.error(f"[{fz_key}] Неизвестная ошибка при keyword='{keyword}': {e}")
         return None, False
 
 async def fetch_pages(keyword, fz_key, session, headers, base_params, url):
@@ -123,7 +126,6 @@ async def get_all_today_items_filter(fz_key: str, fz_name: str, session, headers
 
                 number = item.get("number") or item.get("recordId")
                 if not number:
-                    print("❌ Номер не найден, пропускаем")
                     continue
 
                 # фильтрация по содержанию
@@ -135,7 +137,6 @@ async def get_all_today_items_filter(fz_key: str, fz_name: str, session, headers
 
                 if number:
                     editabs.save(fz=fz_key, number=str(number))
-                    print(f"✅ Закупка {number} сохранена в БД")
 
                 uid = f"{fz_key}:{item.get('number') or item.get('recordId')}"
                 if uid not in found_ids:
@@ -155,16 +156,12 @@ async def get_all_today_items_filter(fz_key: str, fz_name: str, session, headers
 
                     answer_gpt = response.choices[0].message.content.strip()
                     if answer_gpt.lower() == 'нет':
-                        print(f"⛔ Закупка {number} отклонена GPT")
+                        logger.info(f"⛔ Закупка {number} отклонена GPT")
                         continue
                     else:
                         found_ids.add(uid)
-                        print(found_ids)
                         all_items.append(item)
-                        print(f"Добавлен элемент: {uid}")
                         await send_notice(fz_key,fz_name,item)
-                else:
-                    print(f"Элемент уже найден: {uid}")
 
             if should_break_keyword:
                 break
@@ -175,12 +172,11 @@ async def get_all_today_items_filter(fz_key: str, fz_name: str, session, headers
 
 async def send_notice(fz_key,fz_name,item):
     users_data = editabs.get_client_users()
-    print(f"[{datetime.datetime.now()}] Начинаем проверку для {len(users_data)} пользователей")
+    logger.info(f"[{datetime.datetime.now()}] Начинаем проверку для {len(users_data)} пользователей")
 
     number = item.get("number") or item.get("recordId")
 
     if not number:
-        print("❌ Номер не найден")
         return
 
 
@@ -191,7 +187,6 @@ async def send_notice(fz_key,fz_name,item):
             break
 
         chat_id = user_data[0] if isinstance(user_data, tuple) else none_schema()
-        print(f"Обрабатываем chat_id: {chat_id}")
 
         # Ограничиваем количество сообщений для избежания flood control
 
@@ -210,7 +205,7 @@ async def send_notice(fz_key,fz_name,item):
         elif method_type == "EA44":
             full_url = f"https://zakupki.gov.ru/epz/order/notice/ea44/view/common-info.html?regNumber={number}"
         else:
-            print(f"Не удалось определить URL для {number} (тип: {method_type})")
+            logger.info(f"Не удалось определить URL для {number} (тип: {method_type})")
             continue
 
         markup = InlineKeyboardMarkup(
@@ -235,15 +230,13 @@ async def send_notice(fz_key,fz_name,item):
 
             # Если отправили много сообщений - делаем большую паузу
             if messages_sent >= max_messages_per_batch:
-                print(f"Отправлено {messages_sent} сообщений, делаем паузу...")
                 await asyncio.sleep(10)
                 messages_sent = 0
 
         except aiogram.exceptions.TelegramRetryAfter as e:
-            print(f"Flood control: нужно подождать {e.retry_after} секунд")
             await asyncio.sleep(e.retry_after + 1)
         except Exception as e:
-            print(f"Ошибка при отправке сообщения в чат {chat_id}: {e}")
+            logger.error(f"Ошибка при отправке сообщения в чат {chat_id}: {e}")
 
 async def process_items(fz_key, fz_name, session):
     """process_items который использует переданную сессию"""
@@ -270,7 +263,7 @@ async def process_items(fz_key, fz_name, session):
             )
 
     except Exception as e:
-        print(f"Ошибка в process_items_with_session: {e}")
+        logger.error(f"Ошибка в process_items_with_session: {e}")
 
 shutdown_event = asyncio.Event()
 
@@ -283,7 +276,7 @@ async def periodic_check_all_regions():
         try:
             # Создаем одну сессию для всей проверки
             session = aiohttp.ClientSession()
-            print(f"\n[{datetime.datetime.now()}] Начинаем проверку zakupki_allregions")
+            logger.info(f"\n[{datetime.datetime.now()}] Начинаем проверку zakupki_allregions")
 
             # Обрабатываем с передачей сессии
             await process_items("fz44", "44-ФЗ",  session)
@@ -293,10 +286,10 @@ async def periodic_check_all_regions():
             await asyncio.sleep(0.5)
 
         except asyncio.CancelledError:
-            print("Периодическая проверка отменена")
+            logger.info("Периодическая проверка отменена")
             break
         except Exception as e:
-            print(f"Ошибка в periodic_check: {e}")
+            logger.error(f"Ошибка в periodic_check: {e}")
             import traceback
             traceback.print_exc()
         finally:
@@ -308,7 +301,7 @@ async def periodic_check_all_regions():
         elapsed = asyncio.get_event_loop().time() - start_time
         sleep_time = max(0.0, interval - elapsed)
 
-        print(f"[{datetime.datetime.now()}] Проверка заняла {elapsed:.2f} сек")
+        logger.info(f"[{datetime.datetime.now()}] Проверка zakupki_all_regions заняла {elapsed:.2f} сек")
 
         # Ждем с возможностью прерывания
         try:
@@ -316,7 +309,6 @@ async def periodic_check_all_regions():
                 shutdown_event.wait(),
                 timeout=sleep_time
                 )
-            print("Получен сигнал остановки")
             break
         except asyncio.TimeoutError:
             # Продолжаем цикл

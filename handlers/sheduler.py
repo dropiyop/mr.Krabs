@@ -2,6 +2,8 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.executors.asyncio import AsyncIOExecutor
 
+from main import logger
+
 
 class SchedulerManager:
     def __init__(self):
@@ -26,29 +28,29 @@ class SchedulerManager:
                 max_instances=1
                 )
 
-            print("📅 Планировщик настроен:")
-            print("Ежедневная очистка: каждый день в 00:05")
+            logger.info("📅 Планировщик настроен:")
+            logger.info("Ежедневная очистка: каждый день в 00:05")
             return True
 
         except Exception as e:
-            print(f"❌ Ошибка при настройке планировщика: {e}")
+            logger.error(f"❌ Ошибка при настройке планировщика: {e}")
             return False
 
     def start(self):
         """Запуск планировщика"""
         try:
             if self.scheduler is None:
-                print("❌ Планировщик не настроен")
+                logger.info("❌ Планировщик не настроен")
                 return False
 
             if not self.scheduler.running:
                 self.scheduler.start()
-                print("🎯 Планировщик запущен")
+                logger.info("🎯 Планировщик запущен")
                 return True
             else:
-                print("ℹ️ Планировщик уже запущен")
+                logger.info("ℹ️ Планировщик уже запущен")
                 return True
 
         except Exception as e:
-            print(f"❌ Ошибка при запуске планировщика: {e}")
+            logger.error(f"❌ Ошибка при запуске планировщика: {e}")
             return False
